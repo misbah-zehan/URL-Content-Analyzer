@@ -50,4 +50,8 @@ URL-Content-Analyzer/
 
 Computer Science Graduate | Python Developer | Aspiring Software Developer
 
+<<<<<<< HEAD
 ---
+=======
+---
+>>>>>>> 734585da57c939d4076705f53ab38c4f3ce605e4
