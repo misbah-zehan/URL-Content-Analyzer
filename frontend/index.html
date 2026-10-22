@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>URL content analyzer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;800&family=Source+Sans+3:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="masthead">
+    <h1>URL content analyzer</h1>
+    <p>Paste a web page address. You get its title, headings, links, contact details and most-used words.</p>
+    <form id="lookup" class="lookup">
+      <label for="url" class="sr-only">Page address</label>
+      <input id="url" name="url" type="url" required placeholder="https://example.com/article" autofocus>
+      <button id="go" type="submit">Analyze page</button>
+    </form>
+    <p id="error" class="error hidden" role="alert"></p>
+  </header>
+
+  <main id="report" class="report hidden">
+    <aside class="summary">
+      <h2 id="r-title"></h2>
+      <p class="source"><a id="r-url" target="_blank" rel="noopener noreferrer"></a></p>
+      <dl id="r-stats"></dl>
+    </aside>
+    <div class="details" id="r-details"></div>
+  </main>
+
+  <script>
+    const API = "http://127.0.0.1:5000/analyze";
+
+    const form = document.getElementById("lookup");
+    const input = document.getElementById("url");
+    const button = document.getElementById("go");
+    const errorBox = document.getElementById("error");
+    const report = document.getElementById("report");
+
+    // Small helper: build an element and set its text safely (page content is untrusted)
+    function el(tag, text, cls) {
+      const e = document.createElement(tag);
+      if (text !== undefined) e.textContent = text;
+      if (cls) e.className = cls;
+      return e;
+    }
+
+    function showError(msg) {
+      errorBox.textContent = msg;
+      errorBox.classList.remove("hidden");
+      report.classList.add("hidden");
+    }
+
+    function section(title) {
+      const s = document.createElement("section");
+      s.appendChild(el("h3", title));
+      return s;
+    }
+
+    function textList(items, linkify) {
+      const ul = el("ul", undefined, "plain");
+      items.forEach(item => {
+        const li = document.createElement("li");
+        if (linkify) {
+          const a = el("a", item);
+          a.href = item;
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          li.appendChild(a);
+        } else {
+          li.textContent = item;
+        }
+        ul.appendChild(li);
+      });
+      return ul;
+    }
+
+    function render(r) {
+      document.getElementById("r-title").textContent = r.title || "Untitled page";
+      const link = document.getElementById("r-url");
+      link.textContent = r.url;
+      link.href = r.url;
+
+      const stats = [
+        ["Words", r.word_count.toLocaleString()],
+        ["Reading time", r.reading_minutes + " min"],
+        ["Page size", r.size_kb + " KB"],
+        ["Headings", r.heading_total],
+        ["Internal links", r.internal_count],
+        ["External links", r.external_count],
+        ["Images", r.image_count],
+        ["Images without alt text", r.missing_alt],
+      ];
+      const dl = document.getElementById("r-stats");
+      dl.replaceChildren();
+      stats.forEach(([label, value]) => {
+        const row = document.createElement("div");
+        row.appendChild(el("dt", label));
+        const dd = el("dd", String(value));
+        if (label.startsWith("Images without") && r.missing_alt) dd.className = "warn";
+        row.appendChild(dd);
+        dl.appendChild(row);
+      });
+
+      const d = document.getElementById("r-details");
+      d.replaceChildren();
+
+      // Description
+      let s = section("Description");
+      s.appendChild(r.description
+        ? el("p", r.description)
+        : el("p", "This page has no meta description. Search engines will pick their own snippet.", "empty"));
+      if (r.keywords) s.appendChild(el("p", "Meta keywords: " + r.keywords, "muted"));
+      d.appendChild(s);
+
+      // Most-used words
+      s = section("Most-used words");
+      if (r.top_words.length) {
+        const ul = el("ul", undefined, "bars");
+        r.top_words.forEach(([word, count, pct]) => {
+          const li = document.createElement("li");
+          li.appendChild(el("span", word, "word"));
+          const bar = el("span", undefined, "bar");
+          const fill = document.createElement("i");
+          fill.style.width = pct + "%";
+          bar.appendChild(fill);
+          li.appendChild(bar);
+          li.appendChild(el("span", String(count), "count"));
+          ul.appendChild(li);
+        });
+        s.appendChild(ul);
+      } else {
+        s.appendChild(el("p", "No readable text found.", "empty"));
+      }
+      d.appendChild(s);
+
+      // Headings
+      s = section("Headings");
+      if (r.headings.length) {
+        const ul = el("ul", undefined, "outline");
+        r.headings.forEach(([level, text]) => {
+          const li = el("li", undefined, "lvl" + level);
+          li.appendChild(el("b", "H" + level));
+          li.appendChild(document.createTextNode(" " + text));
+          ul.appendChild(li);
+        });
+        s.appendChild(ul);
+        if (r.heading_total > r.headings.length)
+          s.appendChild(el("p", `Showing the first ${r.headings.length} of ${r.heading_total}.`, "muted"));
+      } else {
+        s.appendChild(el("p", "No H1–H3 headings found.", "empty"));
+      }
+      d.appendChild(s);
+
+      // Contacts
+      s = section("Contact details found");
+      const contacts = [...r.emails, ...r.phones];
+      s.appendChild(contacts.length
+        ? textList(contacts)
+        : el("p", "No email addresses or phone numbers found in the page.", "empty"));
+      d.appendChild(s);
+
+      // Social
+      s = section("Social profiles");
+      s.appendChild(r.social.length
+        ? textList(r.social, true)
+        : el("p", "No links to social sites found.", "empty"));
+      d.appendChild(s);
+
+      // External links
+      s = section("External links");
+      if (r.external_links.length) {
+        s.appendChild(textList(r.external_links, true));
+        if (r.external_count > r.external_links.length)
+          s.appendChild(el("p", `Showing the first ${r.external_links.length} of ${r.external_count}.`, "muted"));
+      } else {
+        s.appendChild(el("p", "This page links to no other sites.", "empty"));
+      }
+      d.appendChild(s);
+
+      report.classList.remove("hidden");
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorBox.classList.add("hidden");
+      button.disabled = true;
+      button.textContent = "Analyzing…";
+      try {
+        const resp = await fetch(API, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: input.value.trim() }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) showError(data.error || "Something went wrong.");
+        else render(data);
+      } catch (err) {
+        showError("Can't reach the Python server. Start it with: python app.py (in the backend folder).");
+      } finally {
+        button.disabled = false;
+        button.textContent = "Analyze page";
+      }
+    });
+  </script>
+</body>
+</html>
